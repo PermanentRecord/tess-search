@@ -27,6 +27,7 @@ var MAX_PARALLEL_DOCUMENTS = 1;  // TESS sometimes throws errors when same sessi
 var rp = require('request-promise');
 var Promise = require('bluebird').Promise;
 var cheerio = require('cheerio');
+var extend = require('extend');
 
 var jar = rp.jar();
 
@@ -75,10 +76,17 @@ function TessProgress(message, details) {
 /**
  * @param {string} message - user-facing progress message
  * @param {number} fraction - fraction of the current task this progress event marks completed
+ * @param {document} object - latest loaded document.
  */
-function TessFractionalProgress(message, fraction) {
+function TessFractionalProgress(message, fraction, document) {
     this.message = message;
     this.fraction = fraction;
+
+    // Don't need this in the payload.  Also, don't affect referenced variable.
+    let docCopy = extend({}, document)
+    docCopy._html = null;
+
+    this.document = docCopy;
 }
 
 
@@ -162,16 +170,18 @@ function search(searchTerm, progressHandler) {
                 progressHandler(new TessProgress('Got search response', response.body));
 
                 documentData = $('td:nth-of-type(' + SERIAL_ROW_NUMBER + ') ' + selectors.documentLink).toArray().map(function (el) {
+
                     return {
+                        wordMark: $(el).parent().next().next().text(),
                         imageUrl: IMAGE_HANDLER_URL.replace('{serialNumber}', $(el).html()),
                         docUrl: HOST + $(el).attr('href')
                     };
                 });
 
-                function announceProgress(progress, total) {
+                function announceProgress(progress, total, newDocument) {
                     var message = 'Retrieving ' + total + ' documents',
                         fraction = (progress > 0) ? progress / total : 0;
-                    progressHandler(new TessFractionalProgress(message, fraction));
+                    progressHandler(new TessFractionalProgress(message, fraction, newDocument));
                 }
 
                 function getPromiseForDocument(doc) {
@@ -179,7 +189,7 @@ function search(searchTerm, progressHandler) {
                         .then(function (document) {
                             var $ = cheerio.load(document);
                             requestsCompleted++;
-                            announceProgress(requestsCompleted, documentData.length);
+
                             doc.full = {};
                             $(selectors.resultsTable).find('tr').each(function (i, el) {
                                 var fieldName = $(el).find('td:first-of-type').text().trim(),
@@ -187,6 +197,7 @@ function search(searchTerm, progressHandler) {
                                 doc.full[fieldName] = fieldValue;
                             });
                             doc._html = $('body').html();
+                            announceProgress(requestsCompleted, documentData.length, doc);
                             return doc;
                         });
                 }
